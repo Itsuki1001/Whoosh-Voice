@@ -1,26 +1,34 @@
 """
-tts.py — TTS using ElevenLabs async streaming.
-Pre-warms by starting synthesis on first sentence immediately,
-then pipelines remaining sentences.
+tts.py — Cartesia WebSocket streaming with continuations.
+Single persistent WS connection per turn, sentences pushed as they arrive.
 """
 
 import asyncio
 import queue as _q
 import re
 
-from elevenlabs.client import AsyncElevenLabs
+from cartesia import Cartesia
 
-VOICE_ID           = "JBFqnCBsd6RMkjVDRZzb"
-TTS_MODEL          = "eleven_multilingual_v2"
-MIN_SENTENCE_CHARS = 4
+# ── Config ────────────────────────────────────────────────────────────────────
+VOICE_ID           = "6ccbfb76-1fc6-48f7-b71d-91ac6298247b"
+TTS_MODEL          = "sonic-3"
+OUTPUT_FORMAT      = {
+    "container":   "raw",
+    "encoding":    "pcm_s16le",
+    "sample_rate": 24000,
+}
+MIN_SENTENCE_CHARS = 1
 
-_eleven: AsyncElevenLabs | None = None
+_cartesia: Cartesia | None = None
+
 
 def init_tts(api_key: str):
-    global _eleven
-    _eleven = AsyncElevenLabs(api_key=api_key)
+    global _cartesia
+    _cartesia = Cartesia(api_key=api_key)
+
 
 _SENT_RE = re.compile(r'(?<=[.!?])\s+')
+
 
 def split_sentences(buffer: str) -> tuple[list[str], str]:
     parts = _SENT_RE.split(buffer)
@@ -30,21 +38,63 @@ def split_sentences(buffer: str) -> tuple[list[str], str]:
     return complete, parts[-1]
 
 
-async def _synthesise_and_stream(sentence: str, on_audio_chunk, cancel_event):
-    """Async streaming synthesis for one sentence."""
-    audio_stream = _eleven.text_to_speech.stream(
-        text=sentence,
-        voice_id=VOICE_ID,
-        model_id=TTS_MODEL,
-        output_format="pcm_24000",
-    )
-    async for chunk in audio_stream:
-        if cancel_event.is_set():
-            break
-        if chunk:
-            await on_audio_chunk(chunk)
-            await asyncio.sleep(0)
+# ── WebSocket TTS worker (runs in executor — Cartesia WS is sync) ─────────────
 
+def _ws_tts_worker(
+    sentence_q: _q.Queue,
+    audio_q:    _q.Queue,
+    cancel_flag: asyncio.Event,
+    loop: asyncio.AbstractEventLoop,
+    collected_sentences: list, 
+):
+    """
+    Blocking worker — runs in a thread via run_in_executor.
+    Opens ONE WebSocket, pushes sentences as they arrive, puts audio
+    chunks onto audio_q for the async side to forward.
+    Puts None on audio_q as sentinel when done.
+    """
+    with _cartesia.tts.websocket_connect() as connection:
+        ctx = connection.context(
+            model_id=TTS_MODEL,
+            voice={"mode": "id", "id": VOICE_ID},
+            output_format=OUTPUT_FORMAT,
+        )
+
+        # ── sender: push sentences from sentence_q into WS context ───────────
+        def send_sentences():
+            while True:
+                try:
+                    sentence = sentence_q.get(timeout=0.05)
+                except _q.Empty:
+                    if cancel_flag.is_set():
+                        break
+                    continue
+                if sentence is None:
+                    break
+                if cancel_flag.is_set():
+                    break
+                collected_sentences.append(sentence) 
+                print(f"[TTS] pushing: {sentence[:60]}…")
+                ctx.push(sentence)
+            ctx.no_more_inputs()
+
+        import threading
+        sender = threading.Thread(target=send_sentences, daemon=True)
+        sender.start()
+
+        # ── receiver: forward audio chunks onto audio_q ───────────────────────
+        for response in ctx.receive():
+            if cancel_flag.is_set():
+                break
+            if response.type == "chunk" and response.audio:
+                audio_q.put(response.audio)
+
+        sender.join()
+
+    audio_q.put(None)  # sentinel
+
+
+# ── High-level sentence streamer ──────────────────────────────────────────────
 
 class TTSSentenceStreamer:
 
@@ -56,39 +106,35 @@ class TTSSentenceStreamer:
         sentence_q: _q.Queue,
         cancel_event: asyncio.Event,
     ) -> list[str]:
-        assert _eleven is not None, "Call init_tts(api_key) before using TTS."
+        assert _cartesia is not None, "Call init_tts(api_key) before using TTS."
 
+        loop      = asyncio.get_event_loop()
+        audio_q   = _q.Queue()
         full_parts: list[str] = []
 
-        while True:
-            if cancel_event.is_set():
-                # drain so LLM thread can exit
-                while True:
-                    try:
-                        item = sentence_q.get_nowait()
-                        if item is None:
-                            break
-                    except _q.Empty:
-                        await asyncio.sleep(0.01)
-                break
+        # track sentences for return value
+        original_put = sentence_q.put
 
+        # ── start WS worker in executor ───────────────────────────────────────
+        worker_future = loop.run_in_executor(
+            None,
+            _ws_tts_worker,
+            sentence_q, audio_q, cancel_event, loop,full_parts
+        )
+
+        # ── drain audio_q and forward chunks ─────────────────────────────────
+        while True:
             try:
-                sentence = sentence_q.get_nowait()
+                chunk = audio_q.get_nowait()
             except _q.Empty:
                 await asyncio.sleep(0.01)
                 continue
 
-            if sentence is None:
+            if chunk is None:
                 break
 
-            full_parts.append(sentence)
-            print(f"[TTS] synthesising: {sentence[:60]}…")
+            await self.on_audio_chunk(chunk)
+            await asyncio.sleep(0)
 
-            try:
-                await _synthesise_and_stream(
-                    sentence, self.on_audio_chunk, cancel_event
-                )
-            except Exception as exc:
-                print(f"[TTS ERROR] {exc}")
-
+        await worker_future
         return full_parts

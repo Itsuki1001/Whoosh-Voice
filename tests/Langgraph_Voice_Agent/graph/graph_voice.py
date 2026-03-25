@@ -1,7 +1,9 @@
 import os
 import logging
 from typing import Annotated, TypedDict
-
+import httpx
+import atexit
+import asyncio
 from dotenv import load_dotenv
 from langchain_groq import ChatGroq
 from langchain_openai import ChatOpenAI
@@ -50,6 +52,20 @@ os.environ["LANGCHAIN_PROJECT"] = "Production - Petes Inn Resort"
 # LLM
 # -------------------------------------------------------------------
 
+_http_client = httpx.AsyncClient(
+    limits=httpx.Limits(
+        max_connections=10,
+        max_keepalive_connections=5,
+        keepalive_expiry=30,
+    ),
+    timeout=httpx.Timeout(
+        connect=5.0,
+        read=TIMEOUT,
+        write=10.0,
+        pool=5.0,
+    ),
+)
+
 
 llm = ChatOpenAI(
     api_key=os.getenv("OPENAI_API_KEY"),
@@ -57,8 +73,12 @@ llm = ChatOpenAI(
     temperature=0.4,
     timeout=TIMEOUT,
     max_retries=2,
+    max_tokens=500,
+    http_async_client=_http_client,
 )
 llm_with_tools = llm.bind_tools(tools)
+
+atexit.register(lambda: asyncio.get_event_loop().run_until_complete(_http_client.aclose()))
 
 # -------------------------------------------------------------------
 # STATE

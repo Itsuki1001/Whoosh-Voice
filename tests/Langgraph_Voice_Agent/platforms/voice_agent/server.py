@@ -23,6 +23,7 @@ load_dotenv()
 
 SARVAM_API_KEY     = os.getenv("SARVAM_API_KEY")
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
+CARTESIA_API_KEY  = os.getenv("CARTESIA_API_KEY")
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 from graph.graph_voice import graph
@@ -31,8 +32,16 @@ from graph.graph_voice import graph
 MIN_SENTENCE_CHARS = 0
 LLM_DEBOUNCE       = 0
 
+# ── Tool filler responses ─────────────────────────────────────────────────────
+TOOL_FILLERS = {
+    "get_room_availability": "Sure, let me check room availability for you...",
+    "get_distance_to_homestay":        "Let me look up the distance for you...",
+    "rag_tool":    "Let me pull up that information for you...",
+}
+DEFAULT_FILLER = "Give me just a moment..."
+
 # ── Initialise TTS client once ────────────────────────────────────────────────
-init_tts(ELEVENLABS_API_KEY)
+init_tts(CARTESIA_API_KEY)
 
 app = FastAPI()
 
@@ -55,42 +64,52 @@ _SENT_RE = re.compile(r'(?<=[.!?])\s+')
 
 
 # ── LLM sentence streamer (runs in executor thread) ───────────────────────────
-
 def stream_graph_sentences(
     transcript: str,
     thread_id: str,
     sentence_q: _q.Queue,
     cancel_flag: threading.Event,
 ):
-    """
-    Streams LLM tokens, splits on sentence boundaries, and pushes each complete
-    sentence onto sentence_q.  Pushes None as a sentinel when done.
-    """
     config = {"configurable": {"thread_id": thread_id}}
     buffer = ""
+    filler_sent = False
+
     try:
         for chunk, _ in graph.stream(
             {"messages": transcript}, config, stream_mode="messages"
         ):
             if cancel_flag.is_set():
                 break
-            if hasattr(chunk, "content") and chunk.content:
+            if hasattr(chunk, "content"):
                 if type(chunk).__name__ in ("AIMessageChunk", "AIMessage"):
-                    buffer += chunk.content
-                    parts = _SENT_RE.split(buffer)
-                    if len(parts) > 1:
-                        for sentence in parts[:-1]:
-                            s = clean(sentence)
-                            if len(s) >= MIN_SENTENCE_CHARS:
-                                sentence_q.put(s)
-                        buffer = parts[-1]
+
+                    # ── Filler ────────────────────────────────────────────
+                    if not filler_sent and getattr(chunk, "tool_calls", None):
+                        tool_name = chunk.tool_calls[0].get("name", "")
+                        if tool_name:
+                            filler = TOOL_FILLERS.get(tool_name, DEFAULT_FILLER)
+                            sentence_q.put(filler)
+                            filler_sent = True
+                        continue
+
+                    # ── Normal streaming ──────────────────────────────────
+                    if chunk.content:
+                        buffer += chunk.content
+                        parts = _SENT_RE.split(buffer)
+                        if len(parts) > 1:
+                            for sentence in parts[:-1]:
+                                s = clean(sentence)
+                                if len(s) >= MIN_SENTENCE_CHARS:
+                                    sentence_q.put(s)
+                            buffer = parts[-1]
+
         # flush remainder
         if buffer.strip() and not cancel_flag.is_set():
             r = clean(buffer.strip())
             if r:
                 sentence_q.put(r)
     finally:
-        sentence_q.put(None)   # sentinel
+        sentence_q.put(None)
 
 
 # ── WebSocket endpoint ────────────────────────────────────────────────────────
