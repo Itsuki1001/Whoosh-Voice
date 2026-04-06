@@ -10,7 +10,6 @@ from dotenv import load_dotenv
 from ics import Calendar
 
 from langchain_core.tools import tool
-from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 
 load_dotenv()
