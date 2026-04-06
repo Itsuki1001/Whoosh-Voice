@@ -48,7 +48,7 @@ ip_daily_requests  = defaultdict(lambda: {"count": 0, "reset_at": time.time() + 
 
 MAX_CONCURRENT_PER_IP    = 3
 MAX_REQUESTS_PER_SESSION = 50
-MAX_HOURLY_REQUESTS      = 40
+MAX_HOURLY_REQUESTS      = 20
 MAX_DAILY_REQUESTS       = 100
 
 # ── Rate limit helper ─────────────────────────────────────────────────────────
