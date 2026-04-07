@@ -110,7 +110,7 @@ DEFAULT_FILLERS = [
 ]
 
 # ── Initialise TTS ────────────────────────────────────────────────────────────
-init_tts(SARVAM_API_KEY)
+init_tts(CARTESIA_API_KEY)
 
 # ── Text helpers ──────────────────────────────────────────────────────────────
 def clean(text: str) -> str:
