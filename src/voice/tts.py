@@ -28,15 +28,6 @@ def init_tts(api_key: str):
     _cartesia = Cartesia(api_key=api_key)
 
 
-_SENT_RE = re.compile(r'(?<=[.!?])\s+')
-
-
-def split_sentences(buffer: str) -> tuple[list[str], str]:
-    parts = _SENT_RE.split(buffer)
-    if len(parts) <= 1:
-        return [], buffer
-    complete = [s for s in parts[:-1] if len(s.strip()) >= MIN_SENTENCE_CHARS]
-    return complete, parts[-1]
 
 
 # ── WebSocket TTS worker (runs in executor — Cartesia WS is sync) ─────────────
@@ -115,9 +106,6 @@ class TTSSentenceStreamer:
         audio_q   = _q.Queue()
         full_parts: list[str] = []
 
-        # track sentences for return value
-        original_put = sentence_q.put
-
         # ── start WS worker in executor ───────────────────────────────────────
         worker_future = loop.run_in_executor(
             None,
@@ -127,11 +115,7 @@ class TTSSentenceStreamer:
 
         # ── drain audio_q and forward chunks ─────────────────────────────────
         while True:
-            try:
-                chunk = audio_q.get_nowait()
-            except _q.Empty:
-                await asyncio.sleep(0.01)
-                continue
+            chunk = await loop.run_in_executor(None, audio_q.get)
 
             if chunk is None:
                 break

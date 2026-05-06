@@ -3,121 +3,401 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Pete's Inn — Voice Assistants</title>
-  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400;600&family=DM+Sans:wght@300;400&display=swap" rel="stylesheet"/>
+  <title>Voice Agents</title>
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700&family=DM+Mono:wght@300;400&display=swap" rel="stylesheet"/>
   <style>
     :root {
-      --bg:#0e0e0e; --surface:#161616; --border:#2a2a2a;
-      --gold:#c9a84c; --gold-dim:#7a6130; --text:#e8e0d0;
-      --muted:#6b6358; --you:#4a9eff; --bot:#c9a84c;
-      --sales:#9b59b6; --sales-dim:#6c3483;
-      --support:#2ecc71; --support-dim:#1a7a44;
+      --bg: #f5f4f1;
+      --surface: #ffffff;
+      --border: #e0ddd6;
+      --text: #1a1a1a;
+      --muted: #888780;
+      --accent-soniox: #185fa5;
+      --accent-sarvam: #993c1d;
+      --gold: #854f0b;
+      --sales: #533ab7;
+      --support: #0f6e56;
+      --you: #185fa5;
     }
-    * { box-sizing:border-box; margin:0; padding:0; }
-    body { background:var(--bg); color:var(--text); font-family:'DM Sans',sans-serif; font-weight:300; min-height:100vh; display:flex; flex-direction:column; align-items:center; }
-    header { width:100%; padding:2rem 3rem; border-bottom:1px solid var(--border); }
-    header h1 { font-family:'Cormorant Garamond',serif; font-weight:300; font-size:1.6rem; letter-spacing:.08em; color:var(--gold); }
-    header span { font-size:.75rem; color:var(--muted); letter-spacing:.15em; text-transform:uppercase; }
-    
-    /* Agent Selection */
-    #agent-selector { width:100%; max-width:900px; padding:2rem 1.5rem; display:flex; gap:1rem; flex-wrap:wrap; }
-    .agent-card { flex:1; min-width:200px; padding:1.5rem; border:1.5px solid var(--border); border-radius:8px; background:var(--surface); cursor:pointer; transition:all .3s ease; text-align:center; }
-    .agent-card:hover { border-color:var(--gold); transform:translateY(-2px); }
-    .agent-card.active { border-color:var(--gold); background:#1a1a0a; box-shadow:0 0 20px rgba(201,168,76,.15); }
-    .agent-card.sales:hover { border-color:var(--sales); }
-    .agent-card.sales.active { border-color:var(--sales); background:#1a0a1a; box-shadow:0 0 20px rgba(155,89,182,.15); }
-    .agent-card.support:hover { border-color:var(--support); }
-    .agent-card.support.active { border-color:var(--support); background:#0a1a0f; box-shadow:0 0 20px rgba(46,204,113,.15); }
-    .agent-card h3 { font-family:'Cormorant Garamond',serif; font-size:1.3rem; color:var(--gold); margin-bottom:.5rem; }
-    .agent-card.sales h3 { color:var(--sales); }
-    .agent-card.support h3 { color:var(--support); }
-    .agent-card p { font-size:.85rem; color:var(--muted); line-height:1.5; }
-    .agent-icon { font-size:2rem; margin-bottom:.5rem; }
-    
-    main { width:100%; max-width:760px; flex:1; display:flex; flex-direction:column; padding:2rem 1.5rem; gap:1.5rem; }
-    main.hidden { display:none; }
-    
-    #conversation { flex:1; display:flex; flex-direction:column; gap:1.2rem; min-height:300px; max-height:60vh; overflow-y:auto; }
-    #conversation::-webkit-scrollbar { width:3px; }
-    #conversation::-webkit-scrollbar-thumb { background:var(--border); border-radius:2px; }
-    .msg { display:flex; flex-direction:column; gap:.3rem; animation:fadeUp .3s ease; }
-    @keyframes fadeUp { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:translateY(0)} }
-    .msg-label { font-size:.65rem; letter-spacing:.2em; text-transform:uppercase; }
-    .msg.you .msg-label { color:var(--you); }
-    .msg.bot .msg-label { color:var(--bot); }
-    body.sales-mode .msg.bot .msg-label { color:var(--sales); }
-    body.support-mode .msg.bot .msg-label { color:var(--support); }
-    .msg-text { font-size:1rem; line-height:1.65; }
-    .msg.you .msg-text { color:#a8c8ff; }
-    #interim { font-size:.9rem; color:var(--muted); font-style:italic; min-height:1.4rem; }
-    #status-bar { display:flex; align-items:center; gap:.8rem; font-size:.78rem; color:var(--muted); }
-    #status-dot { width:8px; height:8px; border-radius:50%; background:var(--muted); transition:background .3s; }
-    #status-dot.listening { background:var(--you); box-shadow:0 0 8px var(--you); animation:pulse 1.5s infinite; }
-    #status-dot.thinking  { background:var(--gold); box-shadow:0 0 8px var(--gold); }
-    body.sales-mode #status-dot.thinking { background:var(--sales); box-shadow:0 0 8px var(--sales); }
-    body.support-mode #status-dot.thinking { background:var(--support); box-shadow:0 0 8px var(--support); }
-    #status-dot.speaking  { background:#4ecb71; box-shadow:0 0 8px #4ecb71; animation:pulse 1s infinite; }
-    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
-    #controls { display:flex; justify-content:center; gap:1rem; padding:1rem 0 2rem; }
-    #mic-btn { width:72px; height:72px; border-radius:50%; border:1.5px solid var(--gold-dim); background:var(--surface); cursor:pointer; display:flex; align-items:center; justify-content:center; transition:all .25s ease; position:relative; }
-    body.sales-mode #mic-btn { border-color:var(--sales-dim); }
-    body.support-mode #mic-btn { border-color:var(--support-dim); }
-    #mic-btn:hover { border-color:var(--gold); transform:scale(1.05); }
-    body.sales-mode #mic-btn:hover { border-color:var(--sales); }
-    body.support-mode #mic-btn:hover { border-color:var(--support); }
-    #mic-btn.active { border-color:var(--you); background:#0a1a2e; box-shadow:0 0 24px rgba(74,158,255,.25); }
-    #mic-btn svg { width:26px; height:26px; }
-    #mic-btn .ring { position:absolute; inset:-8px; border-radius:50%; border:1px solid var(--you); opacity:0; }
-    #mic-btn.active .ring { opacity:.4; animation:ring-pulse 2s infinite; }
-    @keyframes ring-pulse { 0%{transform:scale(1);opacity:.4} 100%{transform:scale(1.3);opacity:0} }
-    #back-btn { padding:.6rem 1.2rem; border:1px solid var(--border); background:var(--surface); color:var(--text); border-radius:6px; cursor:pointer; font-size:.85rem; transition:all .3s; }
-    #back-btn:hover { border-color:var(--gold); }
-    #waveform { width:100%; height:48px; }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'DM Mono', monospace;
+      font-weight: 400;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    header {
+      width: 100%;
+      padding: 1.5rem 2.5rem;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: baseline;
+      gap: 1rem;
+      background: var(--surface);
+    }
+
+    header h1 {
+      font-family: 'Syne', sans-serif;
+      font-weight: 700;
+      font-size: 1rem;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+      color: var(--text);
+    }
+
+    header .step-indicator {
+      font-size: .65rem;
+      color: var(--muted);
+      letter-spacing: .2em;
+      text-transform: uppercase;
+    }
+
+    .screen {
+      width: 100%;
+      max-width: 860px;
+      padding: 3rem 1.5rem;
+      display: none;
+      animation: fadeUp .3s ease;
+    }
+
+    .screen.active { display: block; }
+
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(10px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    .screen-title {
+      font-family: 'Syne', sans-serif;
+      font-size: 1.6rem;
+      font-weight: 600;
+      margin-bottom: .4rem;
+      color: var(--text);
+    }
+
+    .screen-sub {
+      font-size: .7rem;
+      color: var(--muted);
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      margin-bottom: 2.5rem;
+    }
+
+    .stt-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+    }
+
+    .stt-card {
+      padding: 3rem 2rem;
+      border: 1.5px solid var(--border);
+      border-radius: 6px;
+      background: var(--surface);
+      cursor: pointer;
+      transition: all .2s ease;
+      position: relative;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .stt-card::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 3px;
+    }
+
+    .stt-card.soniox::before { background: var(--accent-soniox); }
+    .stt-card.sarvam::before  { background: var(--accent-sarvam); }
+
+    .stt-card:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(0,0,0,.08); }
+    .stt-card.soniox:hover { border-color: var(--accent-soniox); }
+    .stt-card.sarvam:hover  { border-color: var(--accent-sarvam); }
+
+    .stt-name {
+      font-family: 'Syne', sans-serif;
+      font-size: 1.8rem;
+      font-weight: 700;
+    }
+
+    .stt-card.soniox .stt-name { color: var(--accent-soniox); }
+    .stt-card.sarvam  .stt-name { color: var(--accent-sarvam); }
+
+    .agent-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1rem;
+    }
+
+    .agent-card {
+      padding: 1.8rem 1.5rem;
+      border: 1.5px solid var(--border);
+      border-radius: 6px;
+      background: var(--surface);
+      cursor: pointer;
+      transition: all .2s ease;
+    }
+
+    .agent-card:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(0,0,0,.08); }
+    .agent-card.resort:hover  { border-color: var(--gold); }
+    .agent-card.sales:hover   { border-color: var(--sales); }
+    .agent-card.support:hover { border-color: var(--support); }
+
+    .agent-icon { font-size: 1.4rem; margin-bottom: .8rem; }
+
+    .agent-name {
+      font-family: 'Syne', sans-serif;
+      font-size: 1rem;
+      font-weight: 600;
+      margin-bottom: .4rem;
+    }
+
+    .agent-card.resort  .agent-name { color: var(--gold); }
+    .agent-card.sales   .agent-name { color: var(--sales); }
+    .agent-card.support .agent-name { color: var(--support); }
+
+    .agent-desc { font-size: .7rem; color: var(--muted); line-height: 1.6; }
+
+    .stt-selection-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: .5rem;
+      font-size: .65rem;
+      letter-spacing: .15em;
+      text-transform: uppercase;
+      padding: .3rem .8rem;
+      border-radius: 3px;
+      border: 1px solid var(--border);
+      margin-bottom: 2rem;
+      cursor: pointer;
+      color: var(--muted);
+      background: var(--surface);
+      transition: border-color .2s;
+    }
+
+    .stt-selection-badge:hover { border-color: #aaa; color: var(--text); }
+    .stt-selection-badge .dot { width: 6px; height: 6px; border-radius: 50%; }
+    .stt-selection-badge.soniox .dot { background: var(--accent-soniox); }
+    .stt-selection-badge.sarvam  .dot { background: var(--accent-sarvam); }
+
+    /* ── Chat screen ── */
+    #chat-screen {
+      max-width: 700px;
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      min-height: calc(100vh - 80px);
+    }
+
+    #chat-screen.active { display: flex; }
+
+    .chat-meta {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      width: 100%;
+      padding: 2rem 0 0;
+    }
+
+    .chat-agent-label {
+      font-family: 'Syne', sans-serif;
+      font-size: .85rem;
+      font-weight: 600;
+      letter-spacing: .05em;
+      color: var(--text);
+    }
+
+    .chat-stt-label {
+      font-size: .6rem;
+      letter-spacing: .15em;
+      text-transform: uppercase;
+      color: var(--muted);
+      padding: .2rem .6rem;
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      background: var(--surface);
+    }
+
+    .mic-area {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 2.5rem;
+    }
+
+    #mic-btn {
+      width: 130px; height: 130px;
+      border-radius: 50%;
+      border: 2px solid var(--border);
+      background: var(--surface);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all .25s ease;
+      position: relative;
+      box-shadow: 0 4px 24px rgba(0,0,0,.07);
+    }
+
+    #mic-btn:hover {
+      border-color: #bbb;
+      transform: scale(1.04);
+      box-shadow: 0 8px 36px rgba(0,0,0,.11);
+    }
+
+    #mic-btn.active {
+      border-color: var(--you);
+      background: #e6f1fb;
+    }
+
+    #mic-btn svg { width: 48px; height: 48px; color: var(--text); }
+
+    #mic-btn .ring {
+      position: absolute; inset: -14px;
+      border-radius: 50%;
+      border: 1.5px solid var(--you);
+      opacity: 0;
+    }
+
+    #mic-btn .ring2 {
+      position: absolute; inset: -28px;
+      border-radius: 50%;
+      border: 1px solid var(--you);
+      opacity: 0;
+    }
+
+    #mic-btn.active .ring  { opacity: .4; animation: ring-pulse 2s infinite; }
+    #mic-btn.active .ring2 { opacity: .18; animation: ring-pulse 2s .5s infinite; }
+
+    @keyframes ring-pulse { 0%{transform:scale(1);opacity:.4} 100%{transform:scale(1.25);opacity:0} }
+
+    .status-row {
+      display: flex;
+      align-items: center;
+      gap: .5rem;
+    }
+
+    #status-dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: var(--muted);
+      transition: background .3s;
+      flex-shrink: 0;
+    }
+
+    #status-dot.listening { background: var(--you); animation: pulse 1.5s infinite; }
+    #status-dot.thinking  { background: var(--gold); }
+    #status-dot.speaking  { background: var(--support); animation: pulse 1s infinite; }
+
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+
+    #status-text {
+      font-size: .7rem;
+      color: var(--muted);
+      letter-spacing: .15em;
+      text-transform: uppercase;
+    }
+
+    canvas#waveform {
+      width: 220px;
+      height: 36px;
+    }
+
+    #back-btn {
+      font-family: 'DM Mono', monospace;
+      font-size: .6rem;
+      letter-spacing: .15em;
+      text-transform: uppercase;
+      padding: .4rem .9rem;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--muted);
+      border-radius: 3px;
+      cursor: pointer;
+      transition: all .2s;
+      margin: 2rem 0 2.5rem;
+    }
+
+    #back-btn:hover { border-color: #aaa; color: var(--text); }
+
+    @media (max-width: 600px) {
+      .stt-grid   { grid-template-columns: 1fr; }
+      .agent-grid { grid-template-columns: 1fr; }
+    }
   </style>
 </head>
 <body>
+
 <header>
-  <h1>Pete's Inn</h1>
-  <span>Voice Assistants</span>
+  <h1>Voice Agents</h1>
+  <span class="step-indicator" id="step-label">Step 1 of 3</span>
 </header>
 
-<!-- Agent Selection Screen -->
-<div id="agent-selector">
-  <div class="agent-card" onclick="selectAgent('resort')">
-    <div class="agent-icon">🏨</div>
-    <h3>Resort Assistant</h3>
-    <p>Book rooms, check availability, and get information about Pete's Inn resort</p>
-  </div>
-  <div class="agent-card sales" onclick="selectAgent('sales')">
-    <div class="agent-icon">💼</div>
-    <h3>Alex - Sales Assistant</h3>
-    <p>Convert leads, handle enquiries, and manage customer conversations</p>
-  </div>
-  <div class="agent-card support" onclick="selectAgent('support')">
-    <div class="agent-icon">🎧</div>
-    <h3>Riya - Support Assistant</h3>
-    <p>Get help with issues, troubleshoot problems, and resolve customer support requests</p>
+<!-- SCREEN 1: STT -->
+<div class="screen active" id="stt-screen">
+  <div class="screen-title">Choose STT Engine</div>
+  <div class="screen-sub">Select your speech recognition provider</div>
+  <div class="stt-grid">
+    <div class="stt-card soniox" onclick="selectSTT('soniox')">
+      <div class="stt-name">Soniox</div>
+    </div>
+    <div class="stt-card sarvam" onclick="selectSTT('sarvam')">
+      <div class="stt-name">Sarvam</div>
+    </div>
   </div>
 </div>
 
-<!-- Main Chat Interface (hidden initially) -->
-<main id="chat-interface" class="hidden">
-  <div id="conversation">
-    <div class="msg bot">
-      <div class="msg-label">Assistant</div>
-      <div class="msg-text" id="welcome-message">Hello! I'm your assistant. Press the mic and ask me anything.</div>
+<!-- SCREEN 2: Agent -->
+<div class="screen" id="agent-screen">
+  <div class="screen-title">Choose Agent</div>
+  <div class="screen-sub">Select the assistant you want to speak with</div>
+  <div class="stt-selection-badge" id="stt-badge" onclick="backToSTT()">
+    <span class="dot"></span>
+    <span id="stt-badge-text">Soniox</span>
+    <span style="opacity:.4">· change</span>
+  </div>
+  <div class="agent-grid">
+    <div class="agent-card resort" onclick="selectAgent('resort')">
+      <div class="agent-icon">🏨</div>
+      <div class="agent-name">Acsa</div>
+      <div class="agent-desc">Resort assistant — rooms, availability, and Paradise Resort info</div>
+    </div>
+    <div class="agent-card sales" onclick="selectAgent('sales')">
+      <div class="agent-icon">💼</div>
+      <div class="agent-name">Alex</div>
+      <div class="agent-desc">Sales assistant — convert leads, handle enquiries</div>
+    </div>
+    <div class="agent-card support" onclick="selectAgent('support')">
+      <div class="agent-icon">🎧</div>
+      <div class="agent-name">Riya</div>
+      <div class="agent-desc">Support assistant — issues, troubleshooting, resolutions</div>
     </div>
   </div>
-  <div id="interim"></div>
-  <canvas id="waveform"></canvas>
-  <div id="status-bar">
-    <div id="status-dot"></div>
-    <span id="status-text">Press mic to start</span>
+</div>
+
+<!-- SCREEN 3: Chat -->
+<div class="screen" id="chat-screen">
+  <div class="chat-meta">
+    <div class="chat-agent-label" id="chat-agent-label">Acsa · Resort</div>
+    <div class="chat-stt-label" id="chat-stt-label">Soniox</div>
   </div>
-  <div id="controls">
-    <button id="back-btn" onclick="backToSelection()">← Change Agent</button>
+
+  <div class="mic-area">
     <button id="mic-btn" onclick="toggleMic()">
       <div class="ring"></div>
+      <div class="ring2"></div>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
         <rect x="9" y="2" width="6" height="12" rx="3"/>
         <path d="M5 10a7 7 0 0 0 14 0"/>
@@ -125,324 +405,190 @@
         <line x1="8" y1="22" x2="16" y2="22"/>
       </svg>
     </button>
+
+    <canvas id="waveform"></canvas>
+
+    <div class="status-row">
+      <div id="status-dot"></div>
+      <span id="status-text">Press mic to start</span>
+    </div>
   </div>
-</main>
+
+  <button id="back-btn" onclick="backToAgents()">← Change Agent</button>
+</div>
 
 <script>
-// ── State ──────────────────────────────────────────────────────────
-let ws          = null;
-let mediaStream = null;
-let processor   = null;
-let audioCtx    = null;
-let isListening = false;
-let currentAgent = null; // 'resort', 'sales', or 'support'
+  let ws = null, mediaStream = null, processor = null, audioCtx = null;
+  let isListening = false, currentAgent = null, currentSTT = null;
 
-// Welcome messages for each agent
-const WELCOME_MESSAGES = {
-  resort: "Hello! I'm your assistant for Pete's Inn. Press the mic to ask about rooms, availability, or anything else.",
-  sales: "Hey, I'm Alex. I help businesses handle customer enquiries instantly and convert more leads. Press the mic to start!",
-  support: "Hey, this is Riya from support. What can I help you with today? Press the mic to get started."
-};
+  const WS_ENDPOINTS = { resort: '/ws/resort', sales: '/ws/sales', support: '/ws/support' };
+  const AGENT_LABELS = { resort: "Acsa · Resort", sales: "Alex · Sales", support: "Riya · Support" };
 
-// WS endpoints for each agent
-const WS_ENDPOINTS = {
-  resort: '/ws/resort',
-  sales: '/ws/sales',
-  support: '/ws/support'
-};
+  function showScreen(id) {
+    document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+    document.getElementById(id).classList.add('active');
+  }
 
-// ── Streaming audio playback with INSTANT stop capability ─────────
-let playCtx       = null;
-let activeSources = [];
-let nextStartTime = 0;
-let playing       = false;
+  function updateStepLabel(n) {
+    document.getElementById('step-label').textContent = `Step ${n} of 3`;
+  }
 
-function getPlayCtx() {
-  if (!playCtx || playCtx.state === 'closed') {
-    playCtx = new AudioContext({ sampleRate: 24000 });
-    nextStartTime = 0;
+  function selectSTT(stt) {
+    currentSTT = stt;
+    const badge = document.getElementById('stt-badge');
+    badge.className = `stt-selection-badge ${stt}`;
+    document.getElementById('stt-badge-text').textContent = stt === 'soniox' ? 'Soniox' : 'Sarvam';
+    showScreen('agent-screen');
+    updateStepLabel(2);
+  }
+
+  function backToSTT() { showScreen('stt-screen'); updateStepLabel(1); }
+
+  function selectAgent(agent) {
+    currentAgent = agent;
+    document.getElementById('chat-agent-label').textContent = AGENT_LABELS[agent];
+    document.getElementById('chat-stt-label').textContent   = currentSTT === 'soniox' ? 'Soniox' : 'Sarvam';
+    document.body.classList.remove('sales-mode', 'support-mode');
+    if (agent === 'sales')   document.body.classList.add('sales-mode');
+    if (agent === 'support') document.body.classList.add('support-mode');
+    showScreen('chat-screen');
+    updateStepLabel(3);
+  }
+
+  function backToAgents() {
+    if (isListening) stopMic();
+    showScreen('agent-screen');
+    updateStepLabel(2);
+  }
+
+  // ── Audio ──
+  let playCtx = null, activeSources = [], nextStartTime = 0, playing = false;
+
+  function getPlayCtx() {
+    if (!playCtx || playCtx.state === 'closed') {
+      playCtx = new AudioContext({ sampleRate: 24000 });
+      nextStartTime = 0; activeSources = [];
+    }
+    return playCtx;
+  }
+
+  function stopAudio() {
+    activeSources.forEach(s => { try { s.stop(); s.disconnect(); } catch(e){} });
     activeSources = [];
+    if (playCtx && playCtx.state !== 'closed') { playCtx.close().catch(()=>{}); playCtx = null; }
+    nextStartTime = 0; playing = false;
   }
-  return playCtx;
-}
 
-function stopAudio() {
-  console.log('[AUDIO] Stopping immediately - killing all sources');
-  
-  activeSources.forEach(src => {
-    try {
-      src.stop();
-      src.disconnect();
-    } catch (e) {}
-  });
-  activeSources = [];
-  
-  if (playCtx && playCtx.state !== 'closed') {
-    playCtx.close().catch(() => {});
-    playCtx = null;
+  function scheduleChunk(pcmBytes) {
+    if (!playing) return;
+    const ctx = getPlayCtx();
+    const i16 = new Int16Array(pcmBytes);
+    const f32 = new Float32Array(i16.length);
+    for (let i = 0; i < i16.length; i++) f32[i] = i16[i] / 32768.0;
+    const buf = ctx.createBuffer(1, f32.length, 24000);
+    buf.copyToChannel(f32, 0);
+    const src = ctx.createBufferSource();
+    src.buffer = buf; src.connect(ctx.destination); activeSources.push(src);
+    src.onended = () => { const i = activeSources.indexOf(src); if (i > -1) activeSources.splice(i, 1); };
+    const now = ctx.currentTime;
+    if (nextStartTime < now) nextStartTime = now + 0.02;
+    src.start(nextStartTime); nextStartTime += buf.duration;
   }
-  
-  nextStartTime = 0;
-  playing = false;
-  console.log('[AUDIO] Stop complete');
-}
 
-function scheduleChunk(pcmBytes) {
-  if (!playing) {
-    console.log('[AUDIO] Not playing, skipping chunk');
-    return;
-  }
-  
-  const ctx = getPlayCtx();
-  const int16 = new Int16Array(pcmBytes);
-  const float32 = new Float32Array(int16.length);
-  for (let i = 0; i < int16.length; i++) float32[i] = int16[i] / 32768.0;
-
-  const buf = ctx.createBuffer(1, float32.length, 24000);
-  buf.copyToChannel(float32, 0);
-
-  const src = ctx.createBufferSource();
-  src.buffer = buf;
-  src.connect(ctx.destination);
-
-  activeSources.push(src);
-  
-  src.onended = () => {
-    const idx = activeSources.indexOf(src);
-    if (idx > -1) activeSources.splice(idx, 1);
-  };
-
-  const now = ctx.currentTime;
-  if (nextStartTime < now) nextStartTime = now + 0.02;
-  src.start(nextStartTime);
-  nextStartTime += buf.duration;
-}
-
-// ── Agent Selection ────────────────────────────────────────────────
-function selectAgent(agent) {
-  currentAgent = agent;
-  
-  // Update UI
-  document.getElementById('agent-selector').style.display = 'none';
-  document.getElementById('chat-interface').classList.remove('hidden');
-  
-  // Update welcome message
-  document.getElementById('welcome-message').textContent = WELCOME_MESSAGES[agent];
-  
-  // Apply theme
-  document.body.classList.remove('sales-mode', 'support-mode');
-  if (agent === 'sales') {
-    document.body.classList.add('sales-mode');
-  } else if (agent === 'support') {
-    document.body.classList.add('support-mode');
-  }
-  
-  console.log(`[AGENT] Selected: ${agent}`);
-}
-
-function backToSelection() {
-  // Stop current session
-  if (isListening) {
-    stopMic();
-  }
-  
-  // Reset UI
-  document.getElementById('agent-selector').style.display = 'flex';
-  document.getElementById('chat-interface').classList.add('hidden');
-  
-  // Clear conversation
-  const conv = document.getElementById('conversation');
-  conv.innerHTML = `
-    <div class="msg bot">
-      <div class="msg-label">Assistant</div>
-      <div class="msg-text" id="welcome-message">Hello! I'm your assistant. Press the mic and ask me anything.</div>
-    </div>
-  `;
-  
-  document.getElementById('interim').textContent = '';
-  document.body.classList.remove('sales-mode', 'support-mode');
-  currentAgent = null;
-}
-
-// ── WebSocket ──────────────────────────────────────────────────────
-function connectWS() {
-  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const endpoint = WS_ENDPOINTS[currentAgent] || '/ws/resort';
-  
-  ws = new WebSocket(`${proto}//${window.location.host}${endpoint}`);
-  ws.binaryType = 'arraybuffer';
-
-  ws.onopen  = () => { 
-    setStatus('listening', 'Listening...'); 
-    document.getElementById('mic-btn').classList.add('active');
-    console.log(`[WS] Connected to ${endpoint}`);
-  };
-  
-  ws.onclose = () => { 
-    setStatus('idle', 'Disconnected'); 
-    document.getElementById('mic-btn').classList.remove('active'); 
-    isListening = false; 
-    stopAudio(); 
-  };
-  
-  ws.onerror = () => { 
-    setStatus('idle', 'Connection error — is the server running?'); 
-  };
-
-  ws.onmessage = (event) => {
-    // Binary = PCM audio chunk
-    if (event.data instanceof ArrayBuffer) {
-      if (playing) {
-        scheduleChunk(event.data);
+  // ── WebSocket ──
+  function connectWS() {
+    const url = `wss://126b-115-247-200-214.ngrok-free.app${WS_ENDPOINTS[currentAgent] || '/ws/resort'}?stt=${currentSTT}`;
+    ws = new WebSocket(url);
+    ws.binaryType = 'arraybuffer';
+    ws.onopen  = () => { setStatus('listening', 'Listening...'); document.getElementById('mic-btn').classList.add('active'); };
+    ws.onclose = () => { setStatus('idle', 'Disconnected'); document.getElementById('mic-btn').classList.remove('active'); isListening = false; stopAudio(); };
+    ws.onerror = () => { setStatus('idle', 'Connection error'); };
+    ws.onmessage = (event) => {
+      if (event.data instanceof ArrayBuffer) { if (playing) scheduleChunk(event.data); return; }
+      const msg = JSON.parse(event.data);
+      if      (msg.type === 'thinking')    { setStatus('thinking', 'Thinking...'); }
+      else if (msg.type === 'audio_start') { stopAudio(); playing = true; setStatus('speaking', 'Speaking...'); }
+      else if (msg.type === 'audio_end')   {
+        playing = false;
+        const ctx = playCtx;
+        if (ctx && nextStartTime > ctx.currentTime) {
+          setTimeout(() => { if (!playing) setStatus('listening', 'Listening...'); }, (nextStartTime - ctx.currentTime) * 1000 + 100);
+        } else { setStatus('listening', 'Listening...'); }
       }
-      return;
-    }
-
-    const msg = JSON.parse(event.data);
-
-    if (msg.type === 'interim') {
-      document.getElementById('interim').textContent = msg.text;
-    }
-    else if (msg.type === 'transcript') {
-      document.getElementById('interim').textContent = '';
-      addMessage('you', msg.text);
-    }
-    else if (msg.type === 'thinking') {
-      setStatus('thinking', 'Thinking...');
-    }
-    else if (msg.type === 'response') {
-      addMessage('bot', msg.text);
-    }
-    else if (msg.type === 'audio_start') {
-      stopAudio();
-      playing = true;
-      setStatus('speaking', 'Speaking...');
-      console.log('[AUDIO] Started receiving audio');
-    }
-    else if (msg.type === 'audio_end') {
-      playing = false;
-      console.log('[AUDIO] Received audio_end signal');
-      
-      const ctx = playCtx;
-      if (ctx && nextStartTime > ctx.currentTime) {
-        const remaining = nextStartTime - ctx.currentTime;
-        setTimeout(() => {
-          if (!playing) {
-            setStatus('listening', 'Listening...');
-          }
-        }, remaining * 1000 + 100);
-      } else {
-        setStatus('listening', 'Listening...');
-      }
-    }
-    else if (msg.type === 'barge_in') {
-      console.log('[BARGE-IN] Received - stopping audio NOW');
-      playing = false;
-      stopAudio();
-      setStatus('listening', 'Listening...');
-      document.getElementById('interim').textContent = '';
-    }
-  };
-}
-
-// ── Mic ────────────────────────────────────────────────────────────
-async function toggleMic() {
-  if (isListening) { stopMic(); } else { await startMic(); }
-}
-
-async function startMic() {
-  try {
-    mediaStream = await navigator.mediaDevices.getUserMedia({ 
-      audio: {
-        sampleRate: 16000, 
-        channelCount: 1,
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-      }
-    });
-
-    audioCtx  = new AudioContext({ sampleRate: 16000 });
-    const src = audioCtx.createMediaStreamSource(mediaStream);
-    processor = audioCtx.createScriptProcessor(4096, 1, 1);
-
-    processor.onaudioprocess = (e) => {
-      if (!ws || ws.readyState !== WebSocket.OPEN) return;
-      const float32 = e.inputBuffer.getChannelData(0);
-      const int16   = new Int16Array(float32.length);
-      for (let i = 0; i < float32.length; i++) {
-        int16[i] = Math.max(-32768, Math.min(32767, float32[i] * 32767));
-      }
-      ws.send(int16.buffer);
+      else if (msg.type === 'barge_in') { playing = false; stopAudio(); setStatus('listening', 'Listening...'); }
     };
-
-    src.connect(processor);
-    processor.connect(audioCtx.destination);
-    isListening = true;
-    connectWS();
-    startWaveform(mediaStream);
-  } catch (error) {
-    console.error('[MIC] Error starting microphone:', error);
-    setStatus('idle', 'Microphone access denied');
   }
-}
 
-function stopMic() {
-  if (processor)   { processor.disconnect(); processor = null; }
-  if (audioCtx)    { audioCtx.close(); audioCtx = null; }
-  if (mediaStream) { mediaStream.getTracks().forEach(t => t.stop()); }
-  if (ws)          { ws.close(); ws = null; }
-  stopAudio();
-  isListening = false;
-  document.getElementById('mic-btn').classList.remove('active');
-  setStatus('idle', 'Press mic to start');
-}
+  // ── Mic ──
+  async function toggleMic() {
+    if (isListening) { stopMic(); } else { await startMic(); }
+  }
 
-// ── Waveform ───────────────────────────────────────────────────────
-function startWaveform(stream) {
-  const canvas   = document.getElementById('waveform');
-  const ctx      = canvas.getContext('2d');
-  const ac       = new AudioContext();
-  const analyser = ac.createAnalyser();
-  analyser.fftSize = 512;
-  ac.createMediaStreamSource(stream).connect(analyser);
-  const data = new Uint8Array(analyser.frequencyBinCount);
-  
-  function draw() {
-    if (!isListening) return;
-    requestAnimationFrame(draw);
-    analyser.getByteTimeDomainData(data);
-    canvas.width = canvas.offsetWidth;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.strokeStyle = '#4a9eff44';
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    const step = canvas.width / data.length;
-    for (let i = 0; i < data.length; i++) {
-      const y = (data[i] / 128.0) * (canvas.height / 2);
-      i === 0 ? ctx.moveTo(0, y) : ctx.lineTo(i * step, y);
+  async function startMic() {
+    try {
+      mediaStream = await navigator.mediaDevices.getUserMedia({
+        audio: { sampleRate: 16000, channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+      });
+      audioCtx  = new AudioContext({ sampleRate: 16000 });
+      const src = audioCtx.createMediaStreamSource(mediaStream);
+      processor = audioCtx.createScriptProcessor(4096, 1, 1);
+      processor.onaudioprocess = (e) => {
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        const f32 = e.inputBuffer.getChannelData(0);
+        const i16 = new Int16Array(f32.length);
+        for (let i = 0; i < f32.length; i++) i16[i] = Math.max(-32768, Math.min(32767, f32[i] * 32767));
+        ws.send(i16.buffer);
+      };
+      src.connect(processor); processor.connect(audioCtx.destination);
+      isListening = true; connectWS(); startWaveform(mediaStream);
+    } catch (err) {
+      setStatus('idle', 'Microphone access denied');
     }
-    ctx.stroke();
   }
-  draw();
-}
 
-// ── UI ─────────────────────────────────────────────────────────────
-function setStatus(state, text) {
-  const dot = document.getElementById('status-dot');
-  dot.className = '';
-  if (state !== 'idle') dot.classList.add(state);
-  document.getElementById('status-text').textContent = text;
-}
+  function stopMic() {
+    if (processor)   { processor.disconnect(); processor = null; }
+    if (audioCtx)    { audioCtx.close(); audioCtx = null; }
+    if (mediaStream) { mediaStream.getTracks().forEach(t => t.stop()); }
+    if (ws)          { ws.close(); ws = null; }
+    stopAudio(); isListening = false;
+    document.getElementById('mic-btn').classList.remove('active');
+    setStatus('idle', 'Press mic to start');
+  }
 
-function addMessage(role, text) {
-  const conv = document.getElementById('conversation');
-  const div  = document.createElement('div');
-  div.className = `msg ${role}`;
-  div.innerHTML = `<div class="msg-label">${role === 'you' ? 'You' : 'Assistant'}</div><div class="msg-text">${text}</div>`;
-  conv.appendChild(div);
-  conv.scrollTop = conv.scrollHeight;
-}
+  // ── Waveform ──
+  function startWaveform(stream) {
+    const canvas   = document.getElementById('waveform');
+    const ctx      = canvas.getContext('2d');
+    const ac       = new AudioContext();
+    const analyser = ac.createAnalyser();
+    analyser.fftSize = 512;
+    ac.createMediaStreamSource(stream).connect(analyser);
+    const data = new Uint8Array(analyser.frequencyBinCount);
+    function draw() {
+      if (!isListening) return;
+      requestAnimationFrame(draw);
+      analyser.getByteTimeDomainData(data);
+      canvas.width = canvas.offsetWidth;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.strokeStyle = '#185fa566';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      const step = canvas.width / data.length;
+      for (let i = 0; i < data.length; i++) {
+        const y = (data[i] / 128.0) * (canvas.height / 2);
+        i === 0 ? ctx.moveTo(0, y) : ctx.lineTo(i * step, y);
+      }
+      ctx.stroke();
+    }
+    draw();
+  }
+
+  function setStatus(state, text) {
+    const dot = document.getElementById('status-dot');
+    dot.className = state !== 'idle' ? state : '';
+    document.getElementById('status-text').textContent = text;
+  }
 </script>
 </body>
 </html>

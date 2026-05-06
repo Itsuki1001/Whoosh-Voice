@@ -52,18 +52,9 @@ os.environ["LANGCHAIN_PROJECT"] = "Production - Petes Inn Resort"
 # LLM
 # -------------------------------------------------------------------
 
-_http_client = httpx.AsyncClient(
-    limits=httpx.Limits(
-        max_connections=10,
-        max_keepalive_connections=5,
-        keepalive_expiry=30,
-    ),
-    timeout=httpx.Timeout(
-        connect=5.0,
-        read=TIMEOUT,
-        write=10.0,
-        pool=5.0,
-    ),
+_http_client = httpx.Client(
+    limits=httpx.Limits(max_connections=10, max_keepalive_connections=5, keepalive_expiry=30),
+    timeout=httpx.Timeout(connect=5.0, read=TIMEOUT, write=10.0, pool=5.0),
 )
 
 
@@ -74,17 +65,11 @@ llm = ChatOpenAI(
     timeout=TIMEOUT,
     max_retries=2,
     max_tokens=500,
-    http_async_client=_http_client,
+    http_client=_http_client,
 )
 llm_with_tools = llm.bind_tools(tools)
 
-def _cleanup():
-    try:
-        asyncio.run(_http_client.aclose())
-    except Exception:
-        pass
 
-atexit.register(_cleanup)
 
 # -------------------------------------------------------------------
 # STATE

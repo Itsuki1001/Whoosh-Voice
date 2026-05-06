@@ -1,6 +1,6 @@
 """
 websocket.py — WebSocket endpoint, rate limiting, STT/TTS/LLM wiring.
-Separated configurations for Resort and Sales agents.
+Supports runtime STT switching (Soniox / Sarvam) via query param ?stt=soniox|sarvam
 """
 
 import asyncio
@@ -16,10 +16,11 @@ import time
 import logging
 from langchain_core.messages import ToolMessage, AIMessage
 from dotenv import load_dotenv
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 from fastapi.responses import HTMLResponse
-
-from voice.stt import STTSession
+from concurrent.futures import ThreadPoolExecutor
+from voice.sttSoniox import STTSession as SonioxSTT
+from voice.sttSarvam import STTSession as SarvamSTT
 from voice.tts import TTSSentenceStreamer, init_tts
 from graph.graph_sales_voice import graph as sales_graph
 from graph.graph_voice import graph as resort_graph
@@ -27,6 +28,7 @@ from graph.graph_customer_support import graph as support_graph
 
 load_dotenv()
 
+SONIOX_API_KEY   = os.getenv("SONIOX_API_KEY")
 SARVAM_API_KEY   = os.getenv("SARVAM_API_KEY")
 CARTESIA_API_KEY = os.getenv("CARTESIA_API_KEY")
 
@@ -39,7 +41,6 @@ MIN_SENTENCE_CHARS = 0
 with open("assets//limit_message.pcm", "rb") as f:
     LIMIT_AUDIO = f.read()
 
-# Separate greeting audio for each agent
 with open("assets//greeting_resort.pcm", "rb") as f:
     RESORT_GREETING_AUDIO = f.read()
 
@@ -53,7 +54,7 @@ with open("assets//greeting_support.pcm", "rb") as f:
 with open("assets//voice_ui.html", encoding="utf-8") as f:
     HTML = f.read()
 
-# ── Rate limiting stores ──────────────────────────────────────────────────────
+# ── Rate limiting ─────────────────────────────────────────────────────────────
 ip_connections     = defaultdict(int)
 session_requests   = defaultdict(int)
 ip_hourly_requests = defaultdict(lambda: {"count": 0, "reset_at": time.time() + 3600})
@@ -64,31 +65,29 @@ MAX_REQUESTS_PER_SESSION = 100
 MAX_HOURLY_REQUESTS      = 100
 MAX_DAILY_REQUESTS       = 100
 
-
-RESORT_VOICE_ID = "f786b574-daa5-4673-aa0c-cbe3e8534c02"  
-SALES_VOICE_ID  = "228fca29-3a0a-435c-8728-5cb483251068"
+RESORT_VOICE_ID  = "f786b574-daa5-4673-aa0c-cbe3e8534c02"
+SALES_VOICE_ID   = "228fca29-3a0a-435c-8728-5cb483251068"
 SUPPORT_VOICE_ID = "6ccbfb76-1fc6-48f7-b71d-91ac6298247b"
+
+
+
+
 
 # ── Rate limit helper ─────────────────────────────────────────────────────────
 def is_ip_limit_reached(ip: str) -> bool:
     now = time.time()
-
     hourly = ip_hourly_requests[ip]
     if now > hourly["reset_at"]:
         hourly["count"] = 0
         hourly["reset_at"] = now + 3600
     if hourly["count"] >= MAX_HOURLY_REQUESTS:
-        logging.warning(f"IP {ip} hit hourly limit")
         return True
-
     daily = ip_daily_requests[ip]
     if now > daily["reset_at"]:
         daily["count"] = 0
         daily["reset_at"] = now + 86400
     if daily["count"] >= MAX_DAILY_REQUESTS:
-        logging.warning(f"IP {ip} hit daily limit")
         return True
-
     hourly["count"] += 1
     daily["count"] += 1
     return False
@@ -96,14 +95,13 @@ def is_ip_limit_reached(ip: str) -> bool:
 
 # ── Language detection ────────────────────────────────────────────────────────
 _LANG_PATTERNS = [
-    (re.compile(r'[\u0D00-\u0D7F]'), "ml"),  # Malayalam
-    (re.compile(r'[\u0900-\u097F]'), "hi"),  # Hindi
-    (re.compile(r'[\u0B80-\u0BFF]'), "ta"),  # Tamil
-    (re.compile(r'[\u0600-\u06FF]'), "ar"),  # Arabic
+    (re.compile(r'[\u0D00-\u0D7F]'), "ml"),
+    (re.compile(r'[\u0900-\u097F]'), "hi"),
+    (re.compile(r'[\u0B80-\u0BFF]'), "ta"),
+    (re.compile(r'[\u0600-\u06FF]'), "ar"),
 ]
 
 def detect_language(text: str) -> str:
-    """Return a language code based on the script used in text."""
     for pattern, lang in _LANG_PATTERNS:
         if pattern.search(text):
             return lang
@@ -113,108 +111,40 @@ def detect_language(text: str) -> str:
 # ── RESORT AGENT FILLERS ──────────────────────────────────────────────────────
 RESORT_FILLERS: dict[str, dict[str, list[str]]] = {
     "check_availability_and_prices": {
-        "en": [
-            "Sure, let me check availability for those dates...",
-            "Give me a moment to check the rooms...",
-            "Let me see what we have open...",
-        ],
-        "ml": [
-            "ഒരു നിമിഷം, ഞാൻ മുറികളുടെ ലഭ്യത നോക്കുന്നു...",
-            "ഒന്ന് നോക്കട്ടെ...",
-            "ആ തീയതികൾക്ക് ലഭ്യത ഉണ്ടോ എന്ന് നോക്കാം...",
-        ],
-        "hi": [
-            "एक पल रुकिए, मैं कमरों की उपलब्धता देख रहा हूँ...",
-            "जरा रुकिए, मैं देखता हूँ...",
-            "उन तारीखों के लिए जाँच करता हूँ...",
-        ],
-        "ta": [
-            "ஒரு நிமிடம், அறைகள் கிடைக்குமா என்று பார்க்கிறேன்...",
-            "சற்று நிறுத்துங்கள், நான் பார்க்கிறேன்...",
-        ],
+        "en": ["Sure, let me check availability for those dates...", "Give me a moment to check the rooms...", "Let me see what we have open..."],
+        "ml": ["ഒരു നിമിഷം, ഞാൻ മുറികളുടെ ലഭ്യത നോക്കുന്നു...", "ഒന്ന് നോക്കട്ടെ...", "ആ തീയതികൾക്ക് ലഭ്യത ഉണ്ടോ എന്ന് നോക്കാം..."],
+        "hi": ["एक पल रुकिए, मैं कमरों की उपलब्धता देख रहा हूँ...", "जरा रुकिए, मैं देखता हूँ..."],
+        "ta": ["ஒரு நிமிடம், அறைகள் கிடைக்குமா என்று பார்க்கிறேன்..."],
     },
     "find_next_available_dates": {
-        "en": [
-            "Let me find the earliest available dates for you...",
-            "Give me a moment to check when we're free...",
-        ],
-        "ml": [
-            "ഏറ്റവും അടുത്ത ലഭ്യമായ തീയതികൾ നോക്കുന്നു...",
-            "ഒരു നിമിഷം, ഞാൻ നോക്കുന്നു...",
-        ],
-        "hi": [
-            "अगली उपलब्ध तारीखें देख रहा हूँ...",
-            "एक पल में बताता हूँ...",
-        ],
-        "ta": [
-            "அடுத்த கிடைக்கும் தேதிகளை பார்க்கிறேன்...",
-        ],
+        "en": ["Let me find the earliest available dates for you...", "Give me a moment to check when we're free..."],
+        "ml": ["ഏറ്റവും അടുത്ത ലഭ്യമായ തീയതികൾ നോക്കുന്നു...", "ഒരു നിമിഷം, ഞാൻ നോക്കുന്നു..."],
+        "hi": ["अगली उपलब्ध तारीखें देख रहा हूँ..."],
+        "ta": ["அடுத்த கிடைக்கும் தேதிகளை பார்க்கிறேன்..."],
     },
     "hold_room_and_generate_payment": {
-        "en": [
-            "Let me reserve that room for you right away...",
-            "Just a moment while I secure your booking...",
-        ],
-        "ml": [
-            "ഒരു നിമിഷം, ഞാൻ മുറി ബുക്ക് ചെയ്യുന്നു...",
-            "ഉടൻ ബുക്ക് ചെയ്യുന്നു...",
-        ],
-        "hi": [
-            "अभी कमरा बुक कर रहा हूँ...",
-            "एक पल में आपकी बुकिंग कर देता हूँ...",
-        ],
-        "ta": [
-            "உங்கள் அறையை இப்போது பதிவு செய்கிறேன்...",
-        ],
+        "en": ["Let me reserve that room for you right away...", "Just a moment while I secure your booking..."],
+        "ml": ["ഒരു നിമിഷം, ഞാൻ മുറി ബുക്ക് ചെയ്യുന്നു...", "ഉടൻ ബുക്ക് ചെയ്യുന്നു..."],
+        "hi": ["अभी कमरा बुक कर रहा हूँ..."],
+        "ta": ["உங்கள் அறையை இப்போது பதிவு செய்கிறேன்..."],
     },
     "get_room_details": {
-        "en": [
-            "Let me pull up the room details for you...",
-            "Give me a second to check that room...",
-        ],
-        "ml": [
-            "ഒരു നിമിഷം, ആ മുറിയുടെ വിവരങ്ങൾ നോക്കുന്നു...",
-        ],
-        "hi": [
-            "उस कमरे की जानकारी देख रहा हूँ...",
-        ],
-        "ta": [
-            "அந்த அறையின் விவரங்களை பார்க்கிறேன்...",
-        ],
+        "en": ["Let me pull up the room details for you...", "Give me a second to check that room..."],
+        "ml": ["ഒരു നിമിഷം, ആ മുറിയുടെ വിവരങ്ങൾ നോക്കുന്നു..."],
+        "hi": ["उस कमरे की जानकारी देख रहा हूँ..."],
+        "ta": ["அந்த அறையின் விவரங்களை பார்க்கிறேன்..."],
     },
     "get_distance_to_homestay": {
-        "en": [
-            "Let me calculate the distance for you...",
-            "Give me a second to check that route...",
-        ],
-        "ml": [
-            "ദൂരം നോക്കുന്നു, ഒരു നിമിഷം...",
-            "വഴി പരിശോധിക്കുന്നു...",
-        ],
-        "hi": [
-            "दूरी देख रहा हूँ, एक पल...",
-        ],
-        "ta": [
-            "தூரத்தை சரிபார்க்கிறேன்...",
-        ],
+        "en": ["Let me calculate the distance for you...", "Give me a second to check that route..."],
+        "ml": ["ദൂരം നോക്കുന്നു, ഒരു നിമിഷം...", "വഴി പരിശോധിക്കുന്നു..."],
+        "hi": ["दूरी देख रहा हूँ, एक पल..."],
+        "ta": ["தூரத்தை சரிபார்க்கிறேன்..."],
     },
     "rag_tool": {
-        "en": [
-            "Let me look that up for you...",
-            "Give me a moment to find that information...",
-            "I'll check that right away...",
-        ],
-        "ml": [
-            "ഒരു നിമിഷം, ഞാൻ നോക്കുന്നു...",
-            "അത് ഉടൻ നോക്കുന്നു...",
-        ],
-        "hi": [
-            "एक पल में देखता हूँ...",
-            "जानकारी देख रहा हूँ...",
-        ],
-        "ta": [
-            "ஒரு நிமிடம், நான் பார்க்கிறேன்...",
-        ],
+        "en": ["Let me look that up for you...", "Give me a moment to find that information...", "I'll check that right away..."],
+        "ml": ["ഒരു നിമിഷം, ഞാൻ നോക്കുന്നു...", "അത് ഉടൻ നോക്കുന്നു..."],
+        "hi": ["एक पल में देखता हूँ..."],
+        "ta": ["ஒரு நிமிடம், நான் பார்க்கிறேன்..."],
     },
 }
 
@@ -225,86 +155,37 @@ RESORT_DEFAULT_FILLERS: dict[str, list[str]] = {
     "ta": ["ஒரு நிமிடம்...", "சற்று நிறுத்துங்கள்..."],
 }
 
-
 # ── SALES AGENT FILLERS ───────────────────────────────────────────────────────
 SALES_FILLERS: dict[str, dict[str, list[str]]] = {
     "search_products": {
-        "en": [
-            "Let me search our catalog for you...",
-            "Give me a moment to find those products...",
-            "Searching our inventory now...",
-        ],
-        "ml": [
-            "ഞങ്ങളുടെ കാറ്റലോഗ് തിരയുന്നു...",
-            "ഒരു നിമിഷം, ഉൽപ്പന്നങ്ങൾ കണ്ടെത്തുന്നു...",
-        ],
-        "hi": [
-            "कैटलॉग में खोज रहा हूँ...",
-            "एक पल में उत्पाद ढूंढता हूँ...",
-        ],
-        "ta": [
-            "எங்கள் பட்டியலில் தேடுகிறேன்...",
-        ],
+        "en": ["Let me search our catalog for you...", "Give me a moment to find those products...", "Searching our inventory now..."],
+        "ml": ["ഞങ്ങളുടെ കാറ്റലോഗ് തിരയുന്നു...", "ഒരു നിമിഷം, ഉൽപ്പന്നങ്ങൾ കണ്ടെത്തുന്നു..."],
+        "hi": ["कैटलॉग में खोज रहा हूँ..."],
+        "ta": ["எங்கள் பட்டியலில் தேடுகிறேன்..."],
     },
     "get_product_details": {
-        "en": [
-            "Let me get the details for that product...",
-            "Pulling up the specifications now...",
-        ],
-        "ml": [
-            "ആ ഉൽപ്പന്നത്തിന്റെ വിശദാംശങ്ങൾ എടുക്കുന്നു...",
-        ],
-        "hi": [
-            "उत्पाद की जानकारी देख रहा हूँ...",
-        ],
-        "ta": [
-            "தயாரிப்பு விவரங்களைப் பார்க்கிறேன்...",
-        ],
+        "en": ["Let me get the details for that product...", "Pulling up the specifications now..."],
+        "ml": ["ആ ഉൽപ്പന്നത്തിന്റെ വിശദാംശങ്ങൾ എടുക്കുന്നു..."],
+        "hi": ["उत्पाद की जानकारी देख रहा हूँ..."],
+        "ta": ["தயாரிப்பு விவரங்களைப் பார்க்கிறேன்..."],
     },
     "check_stock": {
-        "en": [
-            "Checking stock levels for you...",
-            "Let me verify availability...",
-        ],
-        "ml": [
-            "സ്റ്റോക്ക് ലഭ്യത പരിശോധിക്കുന്നു...",
-        ],
-        "hi": [
-            "स्टॉक की जाँच कर रहा हूँ...",
-        ],
-        "ta": [
-            "இருப்பு நிலையை சரிபார்க்கிறேன்...",
-        ],
+        "en": ["Checking stock levels for you...", "Let me verify availability..."],
+        "ml": ["സ്റ്റോക്ക് ലഭ്യത പരിശോധിക്കുന്നു..."],
+        "hi": ["स्टॉक की जाँच कर रहा हूँ..."],
+        "ta": ["இருப்பு நிலையை சரிபார்க்கிறேன்..."],
     },
     "create_order": {
-        "en": [
-            "Processing your order now...",
-            "Let me set that up for you...",
-        ],
-        "ml": [
-            "നിങ്ങളുടെ ഓർഡർ പ്രോസസ്സ് ചെയ്യുന്നു...",
-        ],
-        "hi": [
-            "आपका ऑर्डर तैयार कर रहा हूँ...",
-        ],
-        "ta": [
-            "உங்கள் ஆர்டரை செயல்படுத்துகிறேன்...",
-        ],
+        "en": ["Processing your order now...", "Let me set that up for you..."],
+        "ml": ["നിങ്ങളുടെ ഓർഡർ പ്രോസസ്സ് ചെയ്യുന്നു..."],
+        "hi": ["आपका ऑर्डर तैयार कर रहा हूँ..."],
+        "ta": ["உங்கள் ஆர்டரை செயல்படுத்துகிறேன்..."],
     },
     "calculate_discount": {
-        "en": [
-            "Let me calculate the best price for you...",
-            "Checking available discounts...",
-        ],
-        "ml": [
-            "ഏറ്റവും മികച്ച വില കണക്കാക്കുന്നു...",
-        ],
-        "hi": [
-            "छूट की गणना कर रहा हूँ...",
-        ],
-        "ta": [
-            "தள்ளுபடியை கணக்கிடுகிறேன்...",
-        ],
+        "en": ["Let me calculate the best price for you...", "Checking available discounts..."],
+        "ml": ["ഏറ്റവും മികച്ച വില കണക്കാക്കുന്നു..."],
+        "hi": ["छूट की गणना कर रहा हूँ..."],
+        "ta": ["தள்ளுபடியை கணக்கிடுகிறேன்..."],
     },
 }
 
@@ -315,94 +196,44 @@ SALES_DEFAULT_FILLERS: dict[str, list[str]] = {
     "ta": ["ஒரு நிமிடம்...", "பார்க்கிறேன்..."],
 }
 
-##############  CUSTOMER SUPPORT AGENT FILLERS ##############
-
+# ── SUPPORT AGENT FILLERS ─────────────────────────────────────────────────────
 SUPPORT_FILLERS: dict[str, dict[str, list[str]]] = {
-    "get_order_details": {
-        "en": [
-            "Let me check your order details...",
-            "Give me a moment to pull up your order...",
-        ]
-    },
-    "check_refund_eligibility": {
-        "en": [
-            "Let me check if you're eligible for a refund...",
-            "I'll quickly verify that for you...",
-        ]
-    },
-    "initiate_return_pickup": {
-        "en": [
-            "Let me arrange a pickup for you...",
-            "I'll schedule the return pickup now...",
-        ]
-    },
-    "initiate_refund": {
-        "en": [
-            "Processing your refund now...",
-            "Let me initiate that refund for you...",
-        ]
-    },
-    "product_support_rag": {
-        "en": [
-            "Let me check that for you...",
-            "Give me a moment to find a solution...",
-        ]
-    },
-    "create_support_ticket": {
-        "en": [
-            "Let me raise a support ticket for this...",
-            "I'll log this issue for you...",
-        ]
-    },
-    "escalate_to_human": {
-        "en": [
-            "Let me connect you to a specialist...",
-            "I'll transfer you to our support team...",
-        ]
-    },
+    "get_order_details":          {"en": ["Let me check your order details...", "Give me a moment to pull up your order..."]},
+    "check_refund_eligibility":   {"en": ["Let me check if you're eligible for a refund...", "I'll quickly verify that for you..."]},
+    "initiate_return_pickup":     {"en": ["Let me arrange a pickup for you...", "I'll schedule the return pickup now..."]},
+    "initiate_refund":            {"en": ["Processing your refund now...", "Let me initiate that refund for you..."]},
+    "product_support_rag":        {"en": ["Let me check that for you...", "Give me a moment to find a solution..."]},
+    "create_support_ticket":      {"en": ["Let me raise a support ticket for this...", "I'll log this issue for you..."]},
+    "escalate_to_human":          {"en": ["Let me connect you to a specialist...", "I'll transfer you to our support team..."]},
 }
 
-SUPPORT_DEFAULT_FILLERS = {
-    "en": ["One moment please...", "Let me check that..."]
-}
+SUPPORT_DEFAULT_FILLERS = {"en": ["One moment please...", "Let me check that..."]}
 
-# ── Filler getter functions ───────────────────────────────────────────────────
+
+# ── Filler getters ────────────────────────────────────────────────────────────
 def get_resort_filler(tool_name: str, lang: str) -> str:
-    """Return a random filler string for the resort agent."""
     tool_map = RESORT_FILLERS.get(tool_name, {})
-    options = (
-        tool_map.get(lang)
-        or tool_map.get("en")
-        or RESORT_DEFAULT_FILLERS.get(lang)
-        or RESORT_DEFAULT_FILLERS["en"]
-    )
+    options = tool_map.get(lang) or tool_map.get("en") or RESORT_DEFAULT_FILLERS.get(lang) or RESORT_DEFAULT_FILLERS["en"]
     return random.choice(options)
-
 
 def get_sales_filler(tool_name: str, lang: str) -> str:
-    """Return a random filler string for the sales agent."""
     tool_map = SALES_FILLERS.get(tool_name, {})
-    options = (
-        tool_map.get(lang)
-        or tool_map.get("en")
-        or SALES_DEFAULT_FILLERS.get(lang)
-        or SALES_DEFAULT_FILLERS["en"]
-    )
+    options = tool_map.get(lang) or tool_map.get("en") or SALES_DEFAULT_FILLERS.get(lang) or SALES_DEFAULT_FILLERS["en"]
     return random.choice(options)
-
 
 def get_support_filler(tool_name: str, lang: str) -> str:
     tool_map = SUPPORT_FILLERS.get(tool_name, {})
-    options = (
-        tool_map.get(lang)
-        or tool_map.get("en")
-        or SUPPORT_DEFAULT_FILLERS.get(lang)
-        or SUPPORT_DEFAULT_FILLERS["en"]
-    )
+    options = tool_map.get(lang) or tool_map.get("en") or SUPPORT_DEFAULT_FILLERS.get(lang) or SUPPORT_DEFAULT_FILLERS["en"]
     return random.choice(options)
+
 
 # ── Initialise TTS ────────────────────────────────────────────────────────────
 init_tts(CARTESIA_API_KEY)
+
+_llm_executor = ThreadPoolExecutor(max_workers=20, thread_name_prefix="llm")
+
+
+
 
 # ── Text helpers ──────────────────────────────────────────────────────────────
 def clean(text: str) -> str:
@@ -410,11 +241,11 @@ def clean(text: str) -> str:
     text = re.sub(r'[•\*#`]', '', text)
     return re.sub(r'\n', ' ', text).strip()
 
-_SENT_RE = re.compile(r'(?<=[.!?])\s+')
+_SENT_RE = re.compile(r'(?<=[.!?,;])\s+')
+
 
 # ── Graph state repair ────────────────────────────────────────────────────────
 def fix_broken_graph_state(graph_instance, thread_id: str):
-    """Repair broken graph state after user interruption."""
     config = {"configurable": {"thread_id": thread_id}}
     try:
         state = graph_instance.get_state(config)
@@ -425,35 +256,21 @@ def fix_broken_graph_state(graph_instance, thread_id: str):
         if hasattr(last, "tool_calls") and last.tool_calls:
             for tool_call in last.tool_calls:
                 graph_instance.update_state(config, {
-                    "messages": [ToolMessage(
-                        content="Request was interrupted by user.",
-                        tool_call_id=tool_call["id"]
-                    )]
+                    "messages": [ToolMessage(content="Request was interrupted by user.", tool_call_id=tool_call["id"])]
                 })
-            logging.info(f"[GRAPH] Repaired state for thread {thread_id} after interruption.")
+            logging.info(f"[GRAPH] Repaired state for thread {thread_id}")
     except Exception as e:
         logging.error(f"[GRAPH] state fix failed: {e}")
 
 
 # ── LLM sentence streamer ─────────────────────────────────────────────────────
-def stream_graph_sentences(
-    graph_instance,
-    transcript: str,
-    thread_id: str,
-    sentence_q: _q.Queue,
-    cancel_flag: threading.Event,
-    lang: str,
-    filler_getter_fn,
-):
-    """Stream sentences from graph, with agent-specific filler function."""
+def stream_graph_sentences(graph_instance, transcript, thread_id, sentence_q, cancel_flag, lang, filler_getter_fn):
     config = {"configurable": {"thread_id": thread_id}}
     buffer = ""
     filler_sent = False
 
     try:
-        for chunk, _ in graph_instance.stream(
-            {"messages": transcript}, config, stream_mode="messages"
-        ):
+        for chunk, _ in graph_instance.stream({"messages": transcript}, config, stream_mode="messages"):
             if cancel_flag.is_set():
                 break
             if hasattr(chunk, "content"):
@@ -485,6 +302,27 @@ def stream_graph_sentences(
         sentence_q.put(None)
 
 
+# ── STT factory ───────────────────────────────────────────────────────────────
+def make_stt(stt_choice: str, on_transcript, on_interim, on_barge_in):
+    """Return the right STTSession based on user's choice."""
+    if stt_choice == "sarvam":
+        logging.info("[STT] Using Sarvam AI")
+        return SarvamSTT(
+            api_key=SARVAM_API_KEY,
+            on_transcript=on_transcript,
+            on_interim=on_interim,
+            on_barge_in=on_barge_in,
+        )
+    else:
+        logging.info("[STT] Using Soniox (default)")
+        return SonioxSTT(
+            api_key=SONIOX_API_KEY,
+            on_transcript=on_transcript,
+            on_interim=on_interim,
+            on_barge_in=on_barge_in,
+        )
+
+
 # ── Generic WebSocket handler ─────────────────────────────────────────────────
 async def websocket_handler(
     browser_ws: WebSocket,
@@ -493,9 +331,9 @@ async def websocket_handler(
     greeting_audio: bytes,
     greeting_message: str,
     filler_getter_fn,
-    voice_id: str
+    voice_id: str,
+    stt_choice: str = "soniox",   # ← new param
 ):
-    """Generic WebSocket handler for both resort and sales agents."""
     await browser_ws.accept()
 
     client_ip = browser_ws.client.host
@@ -511,15 +349,11 @@ async def websocket_handler(
     cancel_event = asyncio.Event()
     audio_queue  = asyncio.Queue(maxsize=50)
     current_task = [None]
-    
-    # Initialize graph state with greeting message
+
     if greeting_message:
         config = {"configurable": {"thread_id": thread_id}}
         try:
-            graph_instance.update_state(
-                config,
-                {"messages": [AIMessage(content=greeting_message)]})
-            
+            graph_instance.update_state(config, {"messages": [AIMessage(content=greeting_message)]})
             logging.info(f"[{thread_prefix.upper()}] Initialized with AI greeting")
         except Exception as e:
             logging.error(f"Failed to initialize: {e}")
@@ -601,15 +435,9 @@ async def websocket_handler(
         bot_speaking.set()
 
         llm_future = loop.run_in_executor(
-            None,
-            stream_graph_sentences,
-            graph_instance,
-            transcript,
-            thread_id,
-            sentence_q,
-            llm_cancel,
-            lang,
-            filler_getter_fn,
+            _llm_executor, stream_graph_sentences,
+            graph_instance, transcript, thread_id,
+            sentence_q, llm_cancel, lang, filler_getter_fn,
         )
 
         tts_streamer = TTSSentenceStreamer(on_audio_chunk=send_bytes_ws, voice_id=voice_id)
@@ -634,14 +462,10 @@ async def websocket_handler(
     async def on_interim(text):
         await send_json({"type": "interim", "text": text})
 
-    stt = STTSession(
-        api_key=SARVAM_API_KEY,
-        on_transcript=handle_transcript,
-        on_interim=on_interim,
-        on_barge_in=handle_barge_in,
-    )
-    
-    # Send greeting audio after STT is initialized
+    # ── Build STT based on user's choice ──────────────────────────────────────
+    stt = make_stt(stt_choice, handle_transcript, on_interim, handle_barge_in)
+
+    # Send greeting after STT initialized
     await custom_speech(greeting_audio)
 
     async def stt_loop():
@@ -679,8 +503,7 @@ async def index():
 
 
 @router.websocket("/ws/resort")
-async def websocket_resort_endpoint(browser_ws: WebSocket):
-    """Resort agent WebSocket endpoint."""
+async def websocket_resort_endpoint(browser_ws: WebSocket, stt: str = Query(default="soniox")):
     await websocket_handler(
         browser_ws=browser_ws,
         graph_instance=resort_graph,
@@ -688,13 +511,13 @@ async def websocket_resort_endpoint(browser_ws: WebSocket):
         greeting_audio=RESORT_GREETING_AUDIO,
         filler_getter_fn=get_resort_filler,
         greeting_message="Hi, this is Acsa from Paradise Resort Cherai. How can I help you?",
-        voice_id=RESORT_VOICE_ID
+        voice_id=RESORT_VOICE_ID,
+        stt_choice=stt,
     )
 
 
 @router.websocket("/ws/sales")
-async def websocket_sales_endpoint(browser_ws: WebSocket):
-    """Sales agent WebSocket endpoint."""
+async def websocket_sales_endpoint(browser_ws: WebSocket, stt: str = Query(default="soniox")):
     await websocket_handler(
         browser_ws=browser_ws,
         graph_instance=sales_graph,
@@ -702,17 +525,20 @@ async def websocket_sales_endpoint(browser_ws: WebSocket):
         greeting_audio=SALES_GREETING_AUDIO,
         filler_getter_fn=get_sales_filler,
         greeting_message="Hey, I'm Alex. I help businesses handle customer enquiries instantly and convert more leads. Just curious — how are you currently managing your incoming messages or calls?",
-        voice_id=SALES_VOICE_ID
+        voice_id=SALES_VOICE_ID,
+        stt_choice=stt,
     )
 
+
 @router.websocket("/ws/support")
-async def websocket_support_endpoint(browser_ws: WebSocket):
+async def websocket_support_endpoint(browser_ws: WebSocket, stt: str = Query(default="soniox")):
     await websocket_handler(
         browser_ws=browser_ws,
         graph_instance=support_graph,
         thread_prefix="support",
-        greeting_audio=SUPPORT_GREETING_AUDIO,  # reuse for now
+        greeting_audio=SUPPORT_GREETING_AUDIO,
         filler_getter_fn=get_support_filler,
         greeting_message="Hey, this is Riya from support. What can I help you with today?",
-        voice_id=SUPPORT_VOICE_ID
+        voice_id=SUPPORT_VOICE_ID,
+        stt_choice=stt,
     )
