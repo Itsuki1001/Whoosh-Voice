@@ -497,7 +497,7 @@
 
   // ── WebSocket ──
   function connectWS() {
-    const url = `wss://126b-115-247-200-214.ngrok-free.app${WS_ENDPOINTS[currentAgent] || '/ws/resort'}?stt=${currentSTT}`;
+    const url = `wss://breathingly-ferine-melodee.ngrok-free.dev${WS_ENDPOINTS[currentAgent] || '/ws/resort'}?stt=${currentSTT}`;
     ws = new WebSocket(url);
     ws.binaryType = 'arraybuffer';
     ws.onopen  = () => { setStatus('listening', 'Listening...'); document.getElementById('mic-btn').classList.add('active'); };

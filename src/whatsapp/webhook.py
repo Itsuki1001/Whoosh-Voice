@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from .handler import process_whatsapp_message
 from .state import seen, mark  # kept for backward compat if needed
 
+
 # -------------------------------------------------------------------
 # Setup
 # -------------------------------------------------------------------

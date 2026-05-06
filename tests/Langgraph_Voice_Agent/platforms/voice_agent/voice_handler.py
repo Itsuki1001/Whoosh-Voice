@@ -1,7 +1,7 @@
 import asyncio
 import sys
 import sounddevice as sd
-import ws_routes
+import voice.ws_routes as ws_routes
 import json
 import numpy as np
 import time

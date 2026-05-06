@@ -25,6 +25,11 @@ from voice.tts import TTSSentenceStreamer, init_tts
 from graph.graph_sales_voice import graph as sales_graph
 from graph.graph_voice import graph as resort_graph
 from graph.graph_customer_support import graph as support_graph
+from dashboard.feature_flags import is_enabled
+
+# ── Meta table update (added) ─────────────────────────────────────────────────
+from dashboard.conversation_router import get_conn
+from dashboard.conversation_meta import upsert_meta
 
 load_dotenv()
 
@@ -68,9 +73,6 @@ MAX_DAILY_REQUESTS       = 100
 RESORT_VOICE_ID  = "f786b574-daa5-4673-aa0c-cbe3e8534c02"
 SALES_VOICE_ID   = "228fca29-3a0a-435c-8728-5cb483251068"
 SUPPORT_VOICE_ID = "6ccbfb76-1fc6-48f7-b71d-91ac6298247b"
-
-
-
 
 
 # ── Rate limit helper ─────────────────────────────────────────────────────────
@@ -233,8 +235,6 @@ init_tts(CARTESIA_API_KEY)
 _llm_executor = ThreadPoolExecutor(max_workers=20, thread_name_prefix="llm")
 
 
-
-
 # ── Text helpers ──────────────────────────────────────────────────────────────
 def clean(text: str) -> str:
     text = re.sub(r'http\S+', '', text)
@@ -304,7 +304,6 @@ def stream_graph_sentences(graph_instance, transcript, thread_id, sentence_q, ca
 
 # ── STT factory ───────────────────────────────────────────────────────────────
 def make_stt(stt_choice: str, on_transcript, on_interim, on_barge_in):
-    """Return the right STTSession based on user's choice."""
     if stt_choice == "sarvam":
         logging.info("[STT] Using Sarvam AI")
         return SarvamSTT(
@@ -332,9 +331,13 @@ async def websocket_handler(
     greeting_message: str,
     filler_getter_fn,
     voice_id: str,
-    stt_choice: str = "soniox",   # ← new param
+    stt_choice: str = "soniox",
 ):
     await browser_ws.accept()
+
+    if not is_enabled("voice_agent"):
+        await browser_ws.close(code=1008)
+        return
 
     client_ip = browser_ws.client.host
 
@@ -418,6 +421,22 @@ async def websocket_handler(
         cancel_event.clear()
         current_task[0] = asyncio.create_task(process_transcript(transcript))
 
+    # ── Meta update helper (runs in thread pool, never raises) ────────────────
+    def _meta_update(msg: str, sender: str) -> None:
+        try:
+            conn = get_conn()
+            upsert_meta(
+                conn,
+                thread_id=thread_id,
+                name=thread_id,
+                source="voice",
+                last_message=msg,
+                last_sender=sender,
+            )
+            conn.close()
+        except Exception:
+            logging.exception("[META-VOICE] update failed for thread_id=%s", thread_id)
+
     async def process_transcript(transcript: str):
         sid  = str(uuid.uuid4())
         loop = asyncio.get_running_loop()
@@ -427,6 +446,9 @@ async def websocket_handler(
 
         await send_json({"type": "transcript", "text": transcript})
         await send_json({"type": "thinking"})
+
+        # Guest spoke — update meta immediately
+        await loop.run_in_executor(None, _meta_update, transcript, "guest")
 
         llm_cancel = threading.Event()
         sentence_q = _q.Queue()
@@ -456,16 +478,19 @@ async def websocket_handler(
 
         if not cancel_event.is_set():
             full_response = " ".join(full_parts)
+
+            # Agent replied — update meta with bot's response
+            if full_response.strip():
+                await loop.run_in_executor(None, _meta_update, full_response.strip(), "agent")
+
             await send_json({"type": "response", "text": full_response})
             await send_json({"type": "audio_end", "session_id": sid})
 
     async def on_interim(text):
         await send_json({"type": "interim", "text": text})
 
-    # ── Build STT based on user's choice ──────────────────────────────────────
     stt = make_stt(stt_choice, handle_transcript, on_interim, handle_barge_in)
 
-    # Send greeting after STT initialized
     await custom_speech(greeting_audio)
 
     async def stt_loop():
