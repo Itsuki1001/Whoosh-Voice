@@ -4,7 +4,6 @@ from typing import Annotated, TypedDict
 
 from dotenv import load_dotenv
 import httpx
-from langchain_groq import ChatGroq
 from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, START
 from langgraph.graph.message import add_messages

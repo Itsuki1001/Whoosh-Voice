@@ -21,11 +21,20 @@ from langgraph.checkpoint.serde.encrypted import EncryptedSerializer
 from dotenv import load_dotenv
 load_dotenv()
 from dashboard.feature_flags import set_flag, _flags
+from whatsapp.client import send_text
+
+from langchain_core.messages import AIMessage
+from graph.graph_whatsapp import graph
+import logging
+
 router = APIRouter(prefix="/conversations", tags=["conversations"])
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DB_PATH  = BASE_DIR / "Databases" / "petesinn.sqlite"
 
+log = logging.getLogger(__name__)
+class StaffReplyRequest(BaseModel):
+    message: str
 
 def get_serde() -> EncryptedSerializer:
     key_b64 = os.getenv("ENCRYPTION_KEY")
@@ -201,6 +210,48 @@ def get_conversations():
     ]
 
 
+# ── Debug routes ──────────────────────────────────────────────────────────────
+
+@router.get("/debug/meta-stats")
+def debug_meta_stats():
+    conn   = get_conn()
+    total  = conn.execute("SELECT COUNT(*) FROM conversation_meta").fetchone()[0]
+    latest = conn.execute(
+        "SELECT thread_id, last_time, source FROM conversation_meta ORDER BY updated_at DESC LIMIT 5"
+    ).fetchall()
+    conn.close()
+    return {"meta_row_count": total, "latest_5": [dict(r) for r in latest]}
+
+
+@router.get("/debug")
+def debug_conversations():
+    conn         = get_conn()
+    tables       = conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+    thread_count = conn.execute("SELECT COUNT(DISTINCT thread_id) FROM checkpoints").fetchone()[0]
+    sample       = conn.execute("SELECT thread_id FROM checkpoints LIMIT 1").fetchone()
+    all_threads  = list_threads(conn)
+    conn.close()
+    return {
+        "db_path":          str(DB_PATH),
+        "tables":           [t[0] for t in tables],
+        "thread_count":     thread_count,
+        "voice_count":      sum(1 for t in all_threads if source_from_thread_id(t) == "voice"),
+        "whatsapp_count":   sum(1 for t in all_threads if source_from_thread_id(t) == "whatsapp"),
+        "sample_thread_id": sample[0] if sample else None,
+    }
+
+@router.get("/flags")
+def get_flags():
+    return _flags
+
+@router.post("/flags/{key}")
+def toggle_flag(key: str, enabled: bool):
+    conn = get_conn()
+    set_flag(conn, key, enabled)   # ← add conn
+    conn.close()
+    return {"key": key, "enabled": enabled}
+
+
 @router.get("/{conversation_id}", response_model=Conversation)
 def get_conversation(conversation_id: str):
     """
@@ -250,43 +301,30 @@ def get_conversation(conversation_id: str):
     )
 
 
-# ── Debug routes ──────────────────────────────────────────────────────────────
+@router.post("/{conversation_id}/reply")
+def staff_reply(conversation_id: str, body: StaffReplyRequest):
+    if not body.message.strip():
+        raise HTTPException(status_code=400, detail="Message cannot be empty")
 
-@router.get("/debug/meta-stats")
-def debug_meta_stats():
-    conn   = get_conn()
-    total  = conn.execute("SELECT COUNT(*) FROM conversation_meta").fetchone()[0]
-    latest = conn.execute(
-        "SELECT thread_id, last_time, source FROM conversation_meta ORDER BY updated_at DESC LIMIT 5"
-    ).fetchall()
-    conn.close()
-    return {"meta_row_count": total, "latest_5": [dict(r) for r in latest]}
+    # 1. Send via WhatsApp
+    try:
+        send_text(conversation_id, body.message.strip())
+    except Exception:
+        log.exception("Failed to send staff reply to %s", conversation_id)
+        raise HTTPException(status_code=500, detail="Failed to send message")
 
-
-@router.get("/debug")
-def debug_conversations():
-    conn         = get_conn()
-    tables       = conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
-    thread_count = conn.execute("SELECT COUNT(DISTINCT thread_id) FROM checkpoints").fetchone()[0]
-    sample       = conn.execute("SELECT thread_id FROM checkpoints LIMIT 1").fetchone()
-    all_threads  = list_threads(conn)
-    conn.close()
-    return {
-        "db_path":          str(DB_PATH),
-        "tables":           [t[0] for t in tables],
-        "thread_count":     thread_count,
-        "voice_count":      sum(1 for t in all_threads if source_from_thread_id(t) == "voice"),
-        "whatsapp_count":   sum(1 for t in all_threads if source_from_thread_id(t) == "whatsapp"),
-        "sample_thread_id": sample[0] if sample else None,
-    }
-
-@router.get("/flags")
-def get_flags():
-    return _flags
-
-@router.post("/flags/{key}")
-def toggle_flag(key: str, enabled: bool):
     conn = get_conn()
-    set_flag(conn, key, enabled)   # ← add conn
+
+    # 2. Save to meta table
+
+    # 3. Save to LangGraph checkpoint
+    try:
+        graph.update_state(
+            {"configurable": {"thread_id": conversation_id}},
+            {"messages": [AIMessage(content=body.message.strip())]},
+        )
+    except Exception:
+        log.exception("Failed to update graph state for %s", conversation_id)
+
     conn.close()
-    return {"key": key, "enabled": enabled}
+    return {"ok": True}

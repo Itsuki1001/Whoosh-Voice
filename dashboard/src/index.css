@@ -1,0 +1,73 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 210 20% 98%;
+    --foreground: 222 47% 11%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
+
+    --primary: 158 64% 42%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 210 40% 96%;
+    --secondary-foreground: 222 47% 11%;
+
+    --muted: 210 40% 96%;
+    --muted-foreground: 215 16% 47%;
+
+    --accent: 158 64% 95%;
+    --accent-foreground: 158 64% 30%;
+
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 214 32% 91%;
+    --input: 214 32% 91%;
+    --ring: 158 64% 42%;
+
+    --radius: 0.75rem;
+
+    /* Stat card tints */
+    --stat-green: 152 68% 94%;
+    --stat-green-fg: 158 64% 35%;
+    --stat-blue: 211 100% 95%;
+    --stat-blue-fg: 217 91% 50%;
+    --stat-orange: 32 100% 94%;
+    --stat-orange-fg: 25 95% 53%;
+    --stat-purple: 270 100% 96%;
+    --stat-purple-fg: 271 76% 53%;
+
+    /* Status badge tints */
+    --hot: 0 84% 60%;
+    --hot-bg: 0 100% 96%;
+    --warm: 32 95% 50%;
+    --warm-bg: 32 100% 94%;
+    --cold: 211 100% 60%;
+    --cold-bg: 211 100% 95%;
+
+    --trend-up: 158 64% 42%;
+
+    --sidebar-background: 0 0% 100%;
+    --sidebar-foreground: 222 47% 30%;
+    --sidebar-active: 158 64% 95%;
+    --sidebar-active-foreground: 158 64% 30%;
+    --sidebar-border: 214 32% 91%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  }
+}

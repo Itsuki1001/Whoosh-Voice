@@ -2,10 +2,7 @@ import os
 import logging
 from typing import Annotated, TypedDict
 import httpx
-import atexit
-import asyncio
 from dotenv import load_dotenv
-from langchain_groq import ChatGroq
 from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, START
 from langgraph.graph.message import add_messages
